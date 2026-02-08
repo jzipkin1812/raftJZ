@@ -6,8 +6,7 @@ import time
 import xmlrpc.server
 import threading
 from socketserver import ThreadingMixIn
-from utils import SimpleThreadedXMLRPCServer, userCallback
-import utils
+from utils import SimpleThreadedXMLRPCServer, userCallback, Raft
 
 
 # Parse arguments
@@ -25,12 +24,18 @@ userPort : int = args.user
 peers = [int(port) for port in args.peers] if args.peers is not None else None
 shards = [int(port) for port in args.shards] if args.shards is not None else None
 
-# The transaction log
-transactionLog = []
+# State information for raft
+raft = Raft(myDataCenter, myPort, peers, shards)
 
 
 server = SimpleThreadedXMLRPCServer((f"localhost", myPort), logRequests=False, allow_none=True)
-# server.register_function(printBlockchain, "printBlockchain")
+done = False
+while not done:
+    pass
+server.register_function(raft.AppendEntries, "AppendEntries")
+server.register_function(raft.RequestVote, "RequestVote")
+server.register_function(raft.getIndex, "getIndex")
+
 # server.register_function(printBalance, "printBalance")
 # server.register_function(moneyTransfer, "moneyTransfer")
 # server.register_function(prepare, "prepare")

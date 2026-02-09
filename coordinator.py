@@ -6,7 +6,8 @@ import time
 import xmlrpc.server
 import threading
 from socketserver import ThreadingMixIn
-from utils import SimpleThreadedXMLRPCServer, userCallback, Raft
+from utils import *
+from consensus import Raft, Role, Transaction
 
 
 # Parse arguments
@@ -21,25 +22,23 @@ args = parser.parse_args()
 myDataCenter : int = args.datacenter
 myPort : int = args.port
 userPort : int = args.user
-peers = [int(port) for port in args.peers] if args.peers is not None else None
-shards = [int(port) for port in args.shards] if args.shards is not None else None
+peers = [int(port) for port in args.peers] if args.peers is not None else []
+shards = [int(port) for port in args.shards] if args.shards is not None else []
 
 # State information for raft
 raft = Raft(myDataCenter, myPort, peers, shards)
 
+# Begin the server
+serverExecutor = ThreadPoolExecutor(max_workers=1)
+serverExecutor.submit(lambda : raft.server.serve_forever())
 
-server = SimpleThreadedXMLRPCServer((f"localhost", myPort), logRequests=False, allow_none=True)
-done = False
-while not done:
-    pass
-server.register_function(raft.AppendEntries, "AppendEntries")
-server.register_function(raft.RequestVote, "RequestVote")
-server.register_function(raft.getIndex, "getIndex")
+# Timeout-based loop
+while True:
+    time.sleep(0.1)
+    # userCallback(f"Loopin' with raft {raft.id}")
+    # All roles: Begin an election
+    if raft.timedOut():
+        raft.beginElection()
 
-# server.register_function(printBalance, "printBalance")
-# server.register_function(moneyTransfer, "moneyTransfer")
-# server.register_function(prepare, "prepare")
-# server.register_function(accept, "accept")
-# server.register_function(decide, "decide")
+    # if raft.role == Role.FOLLOWER:
 
-server.serve_forever()    

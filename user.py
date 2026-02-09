@@ -5,6 +5,11 @@ import xmlrpc.client
 import xmlrpc.server
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import logging
+from utils import examine, parseAndStart, getLeader
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+log = logging.getLogger()
 
 def asyncRpc(method, *args):
     try:
@@ -22,69 +27,14 @@ def submitAsync(method, *args):
             print(result)
     executor.submit(task)
 
-def callback(result : str):
-    print(result)
+def callback(result : str, level : int = logging.INFO):
+    log.log(level, msg=result)
     return("Thanks! --the user")
 
 def tryRPC(port : int, function):
     pass
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--callback', type=int, default=8000, help='A callback RPC port')
-parser.add_argument('--coordinator', type=int, default=8001, help='Starting port for coordinators')
-parser.add_argument('--shard', type=int, default=8004, help='Starting port for shard')
-
-args = parser.parse_args()
-
-myCallbackPort = args.callback
-coordinatorPorts = [int(port) for port in range(args.coordinator, args.coordinator + 3)]
-shardPorts = [int(port) for port in range(args.shard, args.shard + 9)]
-coordinatorProcesses = []
-shardProcesses = []
-nodeID = -1
-
-print("Starting", len(shardPorts), "coordinators...")
-
-# Launch coordinators
-for i, port in enumerate(coordinatorPorts):
-    cArgs = ["python3", "-u", "./coordinator.py", "--datacenter", str(i),
-                  "--user", str(myCallbackPort), "--port", str(port), "--peers"]
-    # Coordinator peers
-    for otherPort in coordinatorPorts:
-        if otherPort != port:
-            cArgs.append(str(otherPort))
-    # Shard children
-    cArgs.append("--shards")
-    for shardPort in shardPorts[(i * 3):(i * 3 + 3)]:
-        cArgs.append(str(shardPort))
-
-    process = subprocess.Popen(cArgs,
-                           stderr=subprocess.PIPE,
-                           stdout=subprocess.PIPE,
-                           text=True)
-    coordinatorProcesses.append(process)
-
-# Launch shards
-print("Starting", len(shardPorts), "shards...")
-
-# Launch shards
-for i, port in enumerate(shardPorts):
-    dataCenterID = i // 3
-    shardID = i % 3
-    friendID1 = ((shardID + 1) % 3) + (dataCenterID * 3)
-    friendID2 = ((shardID + 2) % 3) + (dataCenterID * 3)
-    sArgs = ["python3", "-u", "./shard.py", "--datacenter", str(dataCenterID), "--shard", str(shardID),
-                  "--user", str(myCallbackPort), "--coordinator", str(coordinatorPorts[dataCenterID]), 
-                  "--friends", str(shardPorts[friendID1]), str(shardPorts[friendID2])]
-    process = subprocess.Popen(sArgs,
-                           stderr=subprocess.PIPE,
-                           stdout=subprocess.PIPE,
-                           text=True)
-    shardProcesses.append(process)
-
-print("Coordinators and shards are running.")
-print("-----------------------------------\n")
+myCallbackPort, coordinatorPorts, shardPorts, coordinatorProcesses, shardProcesses = parseAndStart()
 
 # Asynchronous RPC primitives
 # Callback request executor
@@ -97,56 +47,43 @@ server.register_function(callback, "callback")
 serverExecutor.submit(lambda: server.serve_forever())
 time.sleep(0.5)
 
-# Main input loop
-# while True:
-#     try:
-#         line = input()
-#         words = [w for w in line.split(" ") if len(w) > 0]
-#         if len(words) < 1:
-#             continue
-#         func = words[0]
+while True:
+    try:
+        line = input()
+        words = [w for w in line.split(" ") if len(w) > 0]
+        if len(words) < 1:
+            continue
+        func = words[0]
 
-#         if func == "wait":
-#             time.sleep(float(words[1]))
+        if func == "wait":
+            time.sleep(float(words[1]))
 
-#         elif func in ["moneyTransfer", "transfer", "transaction", "trans", "t"]:
-#             _, sender, receiver, amount = words
-#             nodePort = ports[int(sender)]
-#             proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-#             submitAsync(proxy.moneyTransfer, int(receiver), int(amount))
+        elif func in ["moneyTransfer", "transfer", "transaction", "trans", "t"]:
+            _, sender, receiver, amount = words
+            nodePort = getLeader(coordinatorPorts)
+            print(nodePort)
+            # proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
+            # submitAsync(proxy.moneyTransfer, int(receiver), int(amount))
 
-#         elif func in ["failProcess", "fail", "kill"]:
-#             _, node = words
-#             p : subprocess.Popen = processes[int(node)]
-#             p.terminate()
-#             running[int(node)] = False
-#             print("Node", node, "killed.")
+        elif func in ["failProcess", "fail", "kill"]:
+            _, node = words
+            if len(node) == 1:
+                i = int(node)
+                p : subprocess.Popen = coordinatorProcesses[i]
+                p.terminate()
+                print("Data center", node, "killed.")
+                for shard in shardProcesses[i*3:i*3+3]:
+                    shard.terminate()
+                print("All shards from data center", node, "killed.")
+            else:
+                p : subprocess.Popen = shardProcesses[int(node[0]) * 3 + int(node[1])]
+                p.terminate()
+                print("Shard", node, "killed.")
 
-#         elif func in ["printBlockchain", "blockchain", "chain", "blocks"]:
-#             _, node = words
-#             nodePort = ports[int(node)]
-#             proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-#             submitAsync(proxy.printBlockchain)
-        
-#         elif func in ["printBalance", "balance", "balances"]:
-#             for i, nodePort in enumerate(ports):
-#                 if running[i]:
-#                     proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-#                     submitAsync(proxy.printBalance)
-#                     break
-
-#         elif func in ["all", "blockchains", "allBlockchains"]:
-#             for node in range(5):
-#                 nodePort = ports[int(node)]
-#                 proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-#                 try:
-#                     proxy.printBlockchain()
-#                 except ConnectionRefusedError:
-#                     print(f"Node {int(node)} is offline.\n")
-#         else:
-#             print("Error: Unrecognized function.")
-#     except EOFError:
-#         break
+        else:
+            print("Error: Unrecognized function.")
+    except EOFError:
+        break
 
 
 # Cleanup
@@ -157,24 +94,19 @@ serverExecutor.shutdown()
 # Terminate processes
 print("-------TERMINATING ALL SHARDS-------")
 for port, process in zip(shardPorts, shardProcesses):
-    # print("\n--------PROCESS---------", port)
-    # out, err = process.communicate(timeout=2)
-    # print(out, end="")
-    # if err:
-    #     print(err, end="")
-    # print("-------------------------")
-
-    process.terminate()
-    print("Killed process", process.pid, "at port", port)
+    result = process.poll()
+    if not (result is None):
+        print(f"Shard {process.pid} at port {port} has already exited with code {result}")
+    else:
+        process.terminate()
+        print(f"Killed shard {process.pid} at port {port}")
 
 print("-------TERMINATING ALL COORDINATORS-------")
 for port, process in zip(coordinatorPorts, coordinatorProcesses):
-    # print("\n--------PROCESS---------", port)
-    # out, err = process.communicate(timeout=2)
-    # print(out, end="")
-    # if err:
-    #     print(err, end="")
-    # print("-------------------------")
-
-    process.terminate()
-    print("Killed process", process.pid, "at port", port)
+    examine(process)
+    result = process.poll()
+    if not (result is None):
+        print(f"Coordinator {process.pid} at port {port} has already exited with code {result}")
+    else:
+        process.terminate()
+        print(f"Killed coordinator {process.pid} at port {port}")

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import logging
 from utils import examine, parseAndStart, getLeader
+import random
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger()
@@ -55,15 +56,27 @@ while True:
             continue
         func = words[0]
 
-        if func == "wait":
+        if func in ["wait", "sleep"]:
             time.sleep(float(words[1]))
 
         elif func in ["moneyTransfer", "transfer", "transaction", "trans", "t"]:
-            _, sender, receiver, amount = words
+            _, fromKey, toKey, amount = words
             nodePort = getLeader(coordinatorPorts)
-            print(nodePort)
-            # proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-            # submitAsync(proxy.moneyTransfer, int(receiver), int(amount))
+            proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
+            submitAsync(proxy.transfer, fromKey, toKey, amount, random.randint(1, 10000))
+
+        elif func in ["log", "printLog", "printTransactions"]:
+            _, ID = words
+            nodePort = coordinatorPorts[int(ID)]
+            proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
+            result = proxy.printLog()
+            print(result)
+
+        elif func in ["all", "allLogs", "printAllLogs", "logs"]:
+            for nodePort in coordinatorPorts:
+                proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
+                result = proxy.printLog()
+                print(result)
 
         elif func in ["failProcess", "fail", "kill"]:
             _, node = words

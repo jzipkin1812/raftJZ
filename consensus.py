@@ -15,6 +15,8 @@ class Role(Enum):
     FOLLOWER = 0
     CANDIDATE = 1
     LEADER = 2
+    def __str__(self):
+        return(["FOLLOWER", "CANDIDATE", "LEADER"][self.value])    
 
 @dataclass
 class Transaction:
@@ -22,11 +24,21 @@ class Transaction:
     keyTo : str
     amount : int
     term : int
+    ID : int
+    def __str__(self):
+        return(f"[{self.term}] {self.keyFrom} -(${self.amount})-> {self.keyTo}")
 
 class Raft:
     def __init__(self, id : int, myPort : int, peerPorts : list[int], shardPorts : list[int]):
         self.id = id
         self.userPort = 8000
+        # jank ass id calculation fix later idk
+        if self.id == 0:
+            self.peerIDs = [1, 2]
+        elif self.id == 1:
+            self.peerIDs = [0, 2]
+        else:
+            self.peerIDs = [0, 1]
 
         # Networking
         userCallback(f"Establishing a coordinator with id {id} and port {myPort}", logging.DEBUG)
@@ -55,18 +67,27 @@ class Raft:
         self.knownLeader = None
 
         # Leader stuff
+        # Next index to send to the peer
         self.nextIndex : list[int] = [0 for _ in peerPorts]
+        # Last index known to match for the peer
         self.matchIndex : list[int] = [0 for _ in peerPorts]
 
         self.registerFunctions()
 
+        # Coordinator with id 2 steps up at the beginning of the program
+        if (self.currentTerm == 0 and self.id == 0):
+            time.sleep(0.5)
+            self.stepUp()
+
     def registerFunctions(self):
-        self.server.register_function(self.AppendEntries, "AppendEntries")
-        self.server.register_function(self.Heartbeat, "Heartbeat")
-        self.server.register_function(self.RequestVote, "RequestVote")
-        self.server.register_function(self.getIndex, "getIndex")
-        self.server.register_function(self.isLeader, "isLeader")
-        self.server.register_function(self.transfer, "transfer")
+        f = self.server.register_function
+        f(self.AppendEntries, "AppendEntries")
+        f(self.Heartbeat, "Heartbeat")
+        f(self.RequestVote, "RequestVote")
+        f(self.getIndex, "getIndex")
+        f(self.isLeader, "isLeader")
+        f(self.transfer, "transfer")
+        f(self.printLog, "printLog")
 
     def lastLogTerm(self):
         term = 0
@@ -76,25 +97,33 @@ class Raft:
 
     # Begin an election with this machine as the candidate.
     def beginElection(self):
+        self.role = Role.CANDIDATE
         self.votedFor = self.id
         self.currentTerm += 1
-        userCallback(f"Coordinator {self.id} is starting an election~")
+        userCallback(f"Coordinator {self.id} is starting an election~", logging.DEBUG)
 
         # Send vote RPCs
         becameLeader = self.campaign()
 
         # If we won, time to step up!
         if becameLeader:
-            userCallback(f"Coordinator {self.id} has become the leader! Heartbeating to {len(self.peerProxies)} proxies.")
-            self.votedFor = None
-            for proxy in self.peerProxies:
-                try:
-                    result = proxy.Heartbeat(self.currentTerm, self.id, len(self.log) - 1, self.lastLogTerm(), self.commitIndex)
-                    userCallback(f"Coordinator {self.id} got the heartbeat result: {result}")
-                except Exception as e:
-                    userCallback(e)
+            self.stepUp()
 
         self.timeIn()
+
+    def stepUp(self):
+        userCallback(f"Coordinator {self.id} has become the leader! Heartbeating to {len(self.peerProxies)} proxies.")
+        self.votedFor = None
+        self.matchIndex = [0 for _ in self.peerProxies]
+        self.nextIndex = [len(self.log) for _ in self.peerProxies]
+        self.role = Role.LEADER
+        for proxy in self.peerProxies:
+            try:
+                result = proxy.Heartbeat(self.currentTerm, self.id, len(self.log) - 1, self.lastLogTerm(), self.commitIndex)
+                # userCallback(f"Coordinator {self.id} got the heartbeat result: {result}")
+            except Exception as e:
+                userCallback(e)
+
 
     def campaign(self):
         def sendVoteRequest(proxy : xmlrpc.client.ServerProxy):
@@ -124,13 +153,18 @@ class Raft:
         
     # Wrapper for append entries
     def Heartbeat(self, term : int, leaderId : int, prevLogIndex : int, prevLogTerm : int, leaderCommit : int) -> tuple[bool, int]:
-        userCallback(f"Coordinator {self.id} got a Heartbeat from leader {leaderId}")
+        userCallback(f"Coordinator {self.id} got a Heartbeat from leader {leaderId}", logging.DEBUG)
         return(self.AppendEntries(term, leaderId, prevLogIndex, prevLogTerm, [], leaderCommit))
 
     def AppendEntries(self, term : int, leaderId : int, prevLogIndex : int, 
                       prevLogTerm : int, entries : list[Transaction], 
                       leaderCommit : int) -> tuple[bool, int]:
         rejection = (False, self.currentTerm)
+
+        # Convert entries to real Transactionsgot
+        for (i, d) in enumerate(entries):
+            if type(d) != Transaction:
+                entries[i] = Transaction(d["keyFrom"], d["keyTo"], d["amount"], d["term"], d["ID"])
         
         # Outdated append RPC is rejected.
         if term < self.currentTerm:
@@ -192,11 +226,42 @@ class Raft:
         if term > self.currentTerm:
             self.currentTerm = term
         self.votedFor = candidateId
-        userCallback(f"Coordinator {self.id} is granting {candidateId}'s vote.")
+        userCallback(f"Coordinator {self.id} is granting {candidateId}'s vote.", logging.DEBUG)
         return(True, self.currentTerm)
     
-    def transfer(self):
-        pass
+    # This will only execute if this machine is the leader.
+    def transfer(self, fromKey : str, toKey : str, amount : int, ID : int) -> bool:
+        if self.role != Role.LEADER:
+            return(False)
+        self.timeIn()
+        term = self.currentTerm
+        t = Transaction(fromKey, toKey, amount, term, ID)
+
+        # Append the transaction to the log.
+        self.log.append(t)
+        
+        # Get consensus.
+        # We repeatedly try to query each friend until we get success.
+        for (i, proxy) in enumerate(self.peerProxies):
+            peerID = self.peerIDs[i]
+            result = False
+            while result == False:
+                idx = self.nextIndex[i]
+                try:
+                    userCallback(f"Coordinator {self.id} sending Append RPC to {peerID} with idx {idx}")
+                    result, term = proxy.AppendEntries(self.currentTerm, self.id, idx - 1, self.log[idx].term,
+                                    self.log[idx:], self.commitIndex)
+                except Exception as e:
+                    userCallback(f"Coordinator {self.id} could not reach peer {peerID}: {e}")
+                    break
+                self.currentTerm = max(term, self.currentTerm)
+                if result:
+                    self.matchIndex[i] = idx
+                    userCallback(f"Coordinator {self.id} successfully appended to {peerID}")
+                else:
+                    self.nextIndex[i] -= 1
+
+        return(True)
     
     def timeIn(self):
         self.clock = time.time()
@@ -209,7 +274,7 @@ class Raft:
         return(len(self.log))
     
     def isLeader(self):
-        userCallback(f"Coordinator {self.id} got a request to see if it's the leader.", logging.DEBUG)
+        userCallback(f"Coordinator {self.id} got a request to see if it's the leader. Its role is {self.role}", logging.INFO)
         return(self.role == Role.LEADER)
 
     def doCommit(self):
@@ -218,6 +283,15 @@ class Raft:
 
     def empty(self):
         return(len(self.log) == 0)
+    
+    # Prints the log along with other stats about the state of the Raft.
+    def printLog(self):
+        msg = ""
+        msg += f"-------LOG OF DATA CENTER {self.id}-------\n"
+        for t in self.log:
+            msg += f"{t}\n"
+        msg += f"----COMMITTED: {self.commitIndex} | ROLE: {self.role} | TERM: {self.currentTerm}----"
+        return(msg)
         
              
         

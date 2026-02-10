@@ -22,7 +22,7 @@ def asyncRpc(method, *args):
     except ConnectionRefusedError as e:
         return f"That node is offline."
     except Exception as e:
-        return f"Unknown RPC Error: {e}"
+        return f"Unknown RPC Error on {method}: {e}"
 
 def submitAsync(method, *args):
     def task():
@@ -72,7 +72,11 @@ while True:
         elif func in ["moneyTransfer", "transfer", "transaction", "trans", "t"]:
             _, fromKey, toKey, amount = words
             nodePort = getLeader(coordinatorPorts)
+            while nodePort == -1:
+                time.sleep(0.5)
+                nodePort = getLeader(coordinatorPorts)
             proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
+            print(f"Submitting transfer to coordinator {nodePort}")
             submitAsync(proxy.transfer, fromKey, toKey, amount, random.randint(1, 1000000))
 
         elif func in ["log", "printLog", "printTransactions"]:

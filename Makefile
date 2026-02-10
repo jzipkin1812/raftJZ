@@ -6,7 +6,7 @@ INPUTFILE ?= input.txt
 OUTPUTFILE ?= output.txt
 
 run_project: 
-	python3 user.py --callback $(USERPORT) --coordinator $(COORDPORT) --shard $(SHARDPORT) < $(INPUTFILE) > $(OUTPUTFILE)
+	python3 user.py --callback $(USERPORT) --coordinator $(COORDPORT) --shard $(SHARDPORT) < $(INPUTFILE)
 	./kill.sh
 
 run_terminal: 

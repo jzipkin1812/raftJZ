@@ -18,6 +18,8 @@ parser.add_argument('--port', type=int, default=0, help='Listener Port')
 parser.add_argument('--friends', nargs='*', help='A list of ports that represent the nearby shards')
 parser.add_argument('--user', type=int, default=8000, help='User Port') 
 parser.add_argument('--coordinator', type=int, default=8100, help='Coordinator Port') 
+parser.add_argument('--recovery', action='store_true', default=False, help='Include if this coordinator should recover by reading from a file') 
+
 args = parser.parse_args()
 
 # Identification / port variables

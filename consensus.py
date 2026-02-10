@@ -9,6 +9,12 @@ from utils import *
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 import logging
+import os
+import json
+from enum import Enum
+from dataclasses import dataclass, asdict
+from typing import Optional
+from colorama import Fore, Style, init
 
 
 class Role(Enum):
@@ -20,16 +26,25 @@ class Role(Enum):
 
 @dataclass
 class Transaction:
-    keyFrom : str
-    keyTo : str
-    amount : int
-    term : int
-    ID : int
+    keyFrom: str
+    keyTo: str
+    amount: int
+    term: int
+    ID: int
+
     def __str__(self):
-        return(f"[{self.term}] {self.keyFrom} -(${self.amount})-> {self.keyTo}")
+        return f"[{self.term}] {self.keyFrom} -(${self.amount})-> {self.keyTo}"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @staticmethod
+    def from_dict(d: dict) -> "Transaction":
+        return Transaction(**d)
 
 class Raft:
-    def __init__(self, id : int, myPort : int, peerPorts : list[int], shardPorts : list[int]):
+    def __init__(self, id : int, myPort : int, peerPorts : list[int], shardPorts : list[int], recovery = False):
+        self.path = os.path.join(".", "raft", f"{id}.txt")
         self.id = id
         self.userPort = 8000
         # jank ass id calculation fix later idk
@@ -57,6 +72,8 @@ class Raft:
         self.currentTerm = 0
         self.votedFor = None
         self.log : list[Transaction] = []
+        if recovery:
+            self.load(self.path)
 
         # Volatile state
         self.commitIndex = 0
@@ -68,9 +85,9 @@ class Raft:
 
         # Leader stuff
         # Next index to send to the peer
-        self.nextIndex : list[int] = [0 for _ in peerPorts]
+        self.nextIndex = [len(self.log) for _ in self.peerProxies]
         # Last index known to match for the peer
-        self.matchIndex : list[int] = [0 for _ in peerPorts]
+        self.matchIndex = [0 for _ in self.peerProxies]
 
         self.registerFunctions()
 
@@ -78,6 +95,26 @@ class Raft:
         if (self.currentTerm == 0 and self.id == 0):
             time.sleep(0.5)
             self.stepUp()
+
+    def save(self, path: str):
+        data = {
+            "role": self.role.value,
+            "currentTerm": self.currentTerm,
+            "votedFor": self.votedFor,
+            "log": [tx.to_dict() for tx in self.log],
+        }
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def load(self, path: str):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.role = Role(data["role"])
+        self.currentTerm = data["currentTerm"]
+        self.votedFor = data["votedFor"]
+        self.log = [Transaction.from_dict(tx) for tx in data["log"]]
 
     def registerFunctions(self):
         f = self.server.register_function
@@ -101,6 +138,7 @@ class Raft:
         self.votedFor = self.id
         self.currentTerm += 1
         userCallback(f"Coordinator {self.id} is starting an election~", logging.DEBUG)
+        self.save(self.path)
 
         # Send vote RPCs
         becameLeader = self.campaign()
@@ -123,7 +161,7 @@ class Raft:
                 # userCallback(f"Coordinator {self.id} got the heartbeat result: {result}")
             except Exception as e:
                 userCallback(e)
-
+        self.save(self.path)
 
     def campaign(self):
         def sendVoteRequest(proxy : xmlrpc.client.ServerProxy):
@@ -206,6 +244,7 @@ class Raft:
             self.commitIndex = leaderCommit
             self.doCommit()
 
+        self.save(self.path)
         return(True, self.currentTerm)
         
     def RequestVote(self, term : int, candidateId : int, 
@@ -227,6 +266,7 @@ class Raft:
             self.currentTerm = term
         self.votedFor = candidateId
         userCallback(f"Coordinator {self.id} is granting {candidateId}'s vote.", logging.DEBUG)
+        self.save(self.path)
         return(True, self.currentTerm)
     
     # This will only execute if this machine is the leader.
@@ -260,7 +300,7 @@ class Raft:
                     userCallback(f"Coordinator {self.id} successfully appended to {peerID}")
                 else:
                     self.nextIndex[i] -= 1
-
+        self.save(self.path)
         return(True)
     
     def timeIn(self):
@@ -291,7 +331,7 @@ class Raft:
         for t in self.log:
             msg += f"{t}\n"
         msg += f"----COMMITTED: {self.commitIndex} | ROLE: {self.role} | TERM: {self.currentTerm}----"
-        return(msg)
+        userCallback(msg, colorID=self.id)
         
              
         

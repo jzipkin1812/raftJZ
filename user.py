@@ -6,10 +6,13 @@ import xmlrpc.server
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import logging
-from utils import examine, parseAndStart, getLeader
+from utils import examine, parseAndStart, getLeader, startCoordinator, startShard
 import random
+import os
+from colorama import Fore, Style, init
+init(autoreset=True)
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger()
 
 def asyncRpc(method, *args):
@@ -28,9 +31,16 @@ def submitAsync(method, *args):
             print(result)
     executor.submit(task)
 
-def callback(result : str, level : int = logging.INFO):
-    log.log(level, msg=result)
+def callback(result : str, level : int = logging.INFO, colorID = None):
+    colors = [Fore.CYAN, Fore.LIGHTGREEN_EX, Fore.YELLOW]
+    if colorID is not None:
+        output = colors[colorID] + result
+    else:
+        output = result
+
+    log.log(level, msg=output)
     return("Thanks! --the user")
+
 
 def tryRPC(port : int, function):
     pass
@@ -69,14 +79,12 @@ while True:
             _, ID = words
             nodePort = coordinatorPorts[int(ID)]
             proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-            result = proxy.printLog()
-            print(result)
+            submitAsync(proxy.printLog)
 
         elif func in ["all", "allLogs", "printAllLogs", "logs"]:
             for nodePort in coordinatorPorts:
                 proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-                result = proxy.printLog()
-                print(result)
+                submitAsync(proxy.printLog)
 
         elif func in ["failProcess", "fail", "kill"]:
             _, node = words
@@ -93,6 +101,22 @@ while True:
                 p.terminate()
                 print("Shard", node, "killed.")
 
+        elif func in ["recover", "restart", "start", "revive"]:
+            _, node = words
+            if len(node) == 1:
+                i = int(node)
+                process = startCoordinator(i, myCallbackPort, coordinatorPorts, shardPorts, True)
+                coordinatorProcesses[i] = process
+                print("Data center", node, "has started back up.")
+                for j in range(i*3, i*3+3):
+                    process = startShard(i, j, myCallbackPort, coordinatorPorts, shardPorts, True)
+                print("All shards from data center", node, "have started back up.")
+            else:
+                i = int(node[0])
+                j = int(node[1])
+                process = startShard(i, j, myCallbackPort, coordinatorPorts, shardPorts, True)
+                shardProcesses[i * 3 + j] = process
+                print("Shard", node, "has started back up.")
         else:
             print("Error: Unrecognized function.")
     except EOFError:
@@ -105,21 +129,29 @@ executor.shutdown(wait=True)
 server.shutdown()
 serverExecutor.shutdown()
 # Terminate processes
-print("-------TERMINATING ALL SHARDS-------")
+print(Fore.RED + "-------TERMINATING ALL SHARDS-------")
 for port, process in zip(shardPorts, shardProcesses):
     result = process.poll()
     if not (result is None):
-        print(f"Shard {process.pid} at port {port} has already exited with code {result}")
+        log.debug(f"Shard {process.pid} at port {port} has already exited with code {result}")
     else:
         process.terminate()
-        print(f"Killed shard {process.pid} at port {port}")
+        log.debug(f"Killed shard {process.pid} at port {port}")
 
-print("-------TERMINATING ALL COORDINATORS-------")
+print(Fore.RED + "-------TERMINATING ALL COORDINATORS-------")
 for port, process in zip(coordinatorPorts, coordinatorProcesses):
-    examine(process)
+    # examine(process)
     result = process.poll()
     if not (result is None):
-        print(f"Coordinator {process.pid} at port {port} has already exited with code {result}")
+        log.debug(f"Coordinator {process.pid} at port {port} has already exited with code {result}")
     else:
         process.terminate()
-        print(f"Killed coordinator {process.pid} at port {port}")
+        log.debug(f"Killed coordinator {process.pid} at port {port}")
+
+print(Fore.RED + "-------CLEARINIG FILE SYSTEM-------")
+for id in [0, 1, 2]:
+    path = os.path.join(".", "raft", f"{id}.txt")
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass

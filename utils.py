@@ -26,21 +26,7 @@ def parseAndStart():
 
     # Launch coordinators
     for i, port in enumerate(coordinatorPorts):
-        cArgs = ["python3", "-u", "./coordinator.py", "--datacenter", str(i),
-                    "--user", str(myCallbackPort), "--port", str(port), "--peers"]
-        # Coordinator peers
-        for otherPort in coordinatorPorts:
-            if otherPort != port:
-                cArgs.append(str(otherPort))
-        # Shard children
-        cArgs.append("--shards")
-        for shardPort in shardPorts[(i * 3):(i * 3 + 3)]:
-            cArgs.append(str(shardPort))
-
-        process = subprocess.Popen(cArgs,
-                            stderr=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            text=True)
+        process = startCoordinator(i, myCallbackPort, coordinatorPorts, shardPorts)
         coordinatorProcesses.append(process)
 
     # Launch shards
@@ -50,23 +36,54 @@ def parseAndStart():
     for i, port in enumerate(shardPorts):
         dataCenterID = i // 3
         shardID = i % 3
-        friendID1 = ((shardID + 1) % 3) + (dataCenterID * 3)
-        friendID2 = ((shardID + 2) % 3) + (dataCenterID * 3)
-        sArgs = ["python3", "-u", "./shard.py", "--datacenter", str(dataCenterID), "--shard", str(shardID),
-                    "--user", str(myCallbackPort), "--coordinator", str(coordinatorPorts[dataCenterID]), 
-                    "--friends", str(shardPorts[friendID1]), str(shardPorts[friendID2])]
-        process = subprocess.Popen(sArgs,
-                            stderr=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            text=True)
+        process = startShard(dataCenterID, shardID, myCallbackPort, coordinatorPorts, shardPorts)
         shardProcesses.append(process)
+        
 
     print("Coordinators and shards are running.")
     print("-----------------------------------\n")
 
     return(myCallbackPort, coordinatorPorts, shardPorts, coordinatorProcesses, shardProcesses)
 
+def startCoordinator(ID : int, callback : int, coordinatorPorts : list[int], 
+                     shardPorts : list[int], recovery = False) -> subprocess.Popen:
+    port = coordinatorPorts[ID]
+    cArgs = ["python3", "-u", "./coordinator.py", "--datacenter", str(ID),
+                    "--user", str(callback), "--port", str(port), "--peers"]
+    # Coordinator peers
+    for otherPort in coordinatorPorts:
+        if otherPort != port:
+            cArgs.append(str(otherPort))
+    # Shard children
+    cArgs.append("--shards")
+    for shardPort in shardPorts[(ID * 3):(ID * 3 + 3)]:
+        cArgs.append(str(shardPort))
 
+    if recovery:
+        cArgs.append("--recovery")
+
+    process = subprocess.Popen(cArgs,
+                        stderr=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        text=True)
+    return(process)
+
+def startShard(dataCenterID : int, shardID : int, callback : int, 
+               coordinatorPorts : list[int], shardPorts : list[int], recovery = False) -> subprocess.Popen:
+    friendID1 = ((shardID + 1) % 3) + (dataCenterID * 3)
+    friendID2 = ((shardID + 2) % 3) + (dataCenterID * 3)
+    sArgs = ["python3", "-u", "./shard.py", "--datacenter", str(dataCenterID), "--shard", str(shardID),
+                "--user", str(callback), "--coordinator", str(coordinatorPorts[dataCenterID]), 
+                "--friends", str(shardPorts[friendID1]), str(shardPorts[friendID2])]
+    if recovery:
+        sArgs.append("--recovery")
+
+    process = subprocess.Popen(sArgs,
+                        stderr=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        text=True)
+    return(process)
+    
 class SimpleThreadedXMLRPCServer(ThreadingMixIn, xmlrpc.server.SimpleXMLRPCServer):
     pass
 
@@ -79,10 +96,10 @@ def balanceDict(shardID : int):
     return(result)
         
     
-def userCallback(msg : str, level : int = logging.INFO, userPort : int = 8000):
+def userCallback(msg : str, level : int = logging.INFO, userPort : int = 8000, colorID = None):
     proxy = xmlrpc.client.ServerProxy(f"http://localhost:{userPort}/", allow_none=True)
     try:
-        proxy.callback(msg, level)
+        proxy.callback(msg, level, colorID)
     except Exception as e:
         print(f"Failed to deliver user callback: {e}")
 

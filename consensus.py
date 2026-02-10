@@ -150,17 +150,38 @@ class Raft:
         self.timeIn()
 
     def stepUp(self):
-        userCallback(f"Coordinator {self.id} has become the leader! Heartbeating to {len(self.peerProxies)} proxies.")
+        userCallback(f"Coordinator {self.id} has become the leader! Heartbeating to {len(self.peerProxies)} proxies.", logging.DEBUG)
         self.votedFor = None
         self.matchIndex = [0 for _ in self.peerProxies]
         self.nextIndex = [len(self.log) for _ in self.peerProxies]
         self.role = Role.LEADER
-        for proxy in self.peerProxies:
-            try:
-                result = proxy.Heartbeat(self.currentTerm, self.id, len(self.log) - 1, self.lastLogTerm(), self.commitIndex)
-                # userCallback(f"Coordinator {self.id} got the heartbeat result: {result}")
-            except Exception as e:
-                userCallback(e)
+        self.save(self.path)
+        self.catchUp()
+
+
+    def catchUp(self):
+        for (i, proxy) in enumerate(self.peerProxies):
+            peerID = self.peerIDs[i]
+            result = False
+            while result == False:
+                idx = self.nextIndex[i]
+                try:
+                    userCallback(f"Coordinator {self.id} sending AppendEntries RPC to {peerID} with idx {idx}", logging.DEBUG)
+                    try:
+                        sendTerm = self.log[idx - 1].term
+                    except:
+                        sendTerm = 0
+                    result, term = proxy.AppendEntries(self.currentTerm, self.id, idx - 1, sendTerm,
+                                    self.log[idx:], self.commitIndex)
+                except Exception as e:
+                    userCallback(f"Coordinator {self.id} could not reach peer {peerID}: {e}", logging.DEBUG)
+                    break
+                self.currentTerm = max(term, self.currentTerm)
+                if result:
+                    self.matchIndex[i] = idx
+                    userCallback(f"Coordinator {self.id} successfully appended to {peerID}", logging.DEBUG)
+                else:
+                    self.nextIndex[i] -= 1
         self.save(self.path)
 
     def campaign(self):
@@ -180,11 +201,11 @@ class Raft:
                     # userCallback(f"Coordinator {self.id} got the vote req result: {res}")
                     results.append(res)
                 except Exception as e:
-                    userCallback(f"Coordinator {self.id} tried to submit a vote request but got the error: {e}")
+                    userCallback(f"Coordinator {self.id} tried to submit a vote request but got the error: {e}", logging.DEBUG)
                     results.append(False)
                     
             # assert len(results) > 1, "No results were received; consensus cannot be reached if both other datacenters have failed!"
-            userCallback(f"Coordinator {self.id} results from campaign: {results}")
+            userCallback(f"Coordinator {self.id} results from campaign: {results}", logging.DEBUG)
             # The following code only works with 3 coordinators but that's okay.
             success = (True in results)
             return(success)
@@ -220,11 +241,12 @@ class Raft:
         
         # If this Raft's log is outdated, we can't append anything.
         if len(self.log) <= prevLogIndex:
+            userCallback(f"{self.id} rejecting Append from {leaderId} because my log length {len(self.log)} <= {prevLogIndex} prevLogIndex")
             return(rejection)
-        if (not self.empty()) and (self.log[prevLogIndex].term != prevLogTerm):
+        if (not self.empty()) and (prevLogIndex >= 0) and (self.log[prevLogIndex].term != prevLogTerm):
+            userCallback(f"{self.id} rejecting Append from {leaderId} self.log[{prevLogIndex}] is {self.log[prevLogIndex]} and prevLogTerm is {prevLogTerm}")
             return(rejection)
                 
-        
         # Loop through the log and delete as necessary
         matches = 0
         series = enumerate(zip(self.log[prevLogIndex + 1:], entries))
@@ -249,7 +271,6 @@ class Raft:
         
     def RequestVote(self, term : int, candidateId : int, 
                     lastLogIndex : int, lastLogTerm : int) -> tuple[bool, int]:
-        # userCallback(f"Coordinator {self.id} got a RequestVote from {candidateId}, term {term}.")
         rejection = (False, self.currentTerm)
         # Basics
         if term < self.currentTerm or \
@@ -282,25 +303,9 @@ class Raft:
         
         # Get consensus.
         # We repeatedly try to query each friend until we get success.
-        for (i, proxy) in enumerate(self.peerProxies):
-            peerID = self.peerIDs[i]
-            result = False
-            while result == False:
-                idx = self.nextIndex[i]
-                try:
-                    userCallback(f"Coordinator {self.id} sending Append RPC to {peerID} with idx {idx}")
-                    result, term = proxy.AppendEntries(self.currentTerm, self.id, idx - 1, self.log[idx].term,
-                                    self.log[idx:], self.commitIndex)
-                except Exception as e:
-                    userCallback(f"Coordinator {self.id} could not reach peer {peerID}: {e}")
-                    break
-                self.currentTerm = max(term, self.currentTerm)
-                if result:
-                    self.matchIndex[i] = idx
-                    userCallback(f"Coordinator {self.id} successfully appended to {peerID}")
-                else:
-                    self.nextIndex[i] -= 1
+        self.catchUp()
         self.save(self.path)
+        userCallback(f"Your transaction with ID {t.ID} completed: {t}", colorID = 3)
         return(True)
     
     def timeIn(self):
@@ -314,7 +319,7 @@ class Raft:
         return(len(self.log))
     
     def isLeader(self):
-        userCallback(f"Coordinator {self.id} got a request to see if it's the leader. Its role is {self.role}", logging.INFO)
+        userCallback(f"Coordinator {self.id} got a request to see if it's the leader. Its role is {self.role}", logging.DEBUG)
         return(self.role == Role.LEADER)
 
     def doCommit(self):

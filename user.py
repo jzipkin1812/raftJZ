@@ -32,13 +32,13 @@ def submitAsync(method, *args):
     executor.submit(task)
 
 def callback(result : str, level : int = logging.INFO, colorID = None):
-    colors = [Fore.CYAN, Fore.LIGHTGREEN_EX, Fore.YELLOW]
+    colors = [Fore.CYAN, Fore.LIGHTGREEN_EX, Fore.YELLOW, Fore.WHITE]
     if colorID is not None:
         output = colors[colorID] + result
     else:
         output = result
 
-    log.log(level, msg=output)
+    log.log(level, msg=output)  
     return("Thanks! --the user")
 
 
@@ -56,7 +56,7 @@ executor = ThreadPoolExecutor(max_workers=len(coordinatorProcesses))
 server = xmlrpc.server.SimpleXMLRPCServer(("127.0.0.1", myCallbackPort), logRequests=False, allow_none=True)
 server.register_function(callback, "callback")
 serverExecutor.submit(lambda: server.serve_forever())
-time.sleep(0.5)
+time.sleep(0.6)
 
 while True:
     try:
@@ -73,7 +73,7 @@ while True:
             _, fromKey, toKey, amount = words
             nodePort = getLeader(coordinatorPorts)
             proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
-            submitAsync(proxy.transfer, fromKey, toKey, amount, random.randint(1, 10000))
+            submitAsync(proxy.transfer, fromKey, toKey, amount, random.randint(1, 1000000))
 
         elif func in ["log", "printLog", "printTransactions"]:
             _, ID = words

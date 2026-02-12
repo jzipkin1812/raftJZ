@@ -7,6 +7,34 @@ import time
 import subprocess
 import argparse
 import logging
+from enum import Enum
+from dataclasses import dataclass, asdict
+
+class Role(Enum):
+    FOLLOWER = 0
+    CANDIDATE = 1
+    LEADER = 2
+    def __str__(self):
+        return(["FOLLOWER", "CANDIDATE", "LEADER"][self.value])    
+
+@dataclass
+class Transaction:
+    keyFrom: str
+    keyTo: str
+    amount: int
+    term: int
+    ID: int
+
+    def __str__(self):
+        return f"[{self.term}] {self.keyFrom} -(${self.amount})-> {self.keyTo}"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @staticmethod
+    def from_dict(d: dict) -> "Transaction":
+        return Transaction(**d)
+
 
 def parseAndStart():
     parser = argparse.ArgumentParser()
@@ -70,11 +98,12 @@ def startCoordinator(ID : int, callback : int, coordinatorPorts : list[int],
 
 def startShard(dataCenterID : int, shardID : int, callback : int, 
                coordinatorPorts : list[int], shardPorts : list[int], recovery = False) -> subprocess.Popen:
+    myID = (shardID) + (dataCenterID * 3)
     friendID1 = ((shardID + 1) % 3) + (dataCenterID * 3)
     friendID2 = ((shardID + 2) % 3) + (dataCenterID * 3)
     sArgs = ["python3", "-u", "./shard.py", "--datacenter", str(dataCenterID), "--shard", str(shardID),
                 "--user", str(callback), "--coordinator", str(coordinatorPorts[dataCenterID]), 
-                "--friends", str(shardPorts[friendID1]), str(shardPorts[friendID2])]
+                "--friends", str(shardPorts[friendID1]), str(shardPorts[friendID2]), "--port", str(shardPorts[myID])]
     if recovery:
         sArgs.append("--recovery")
 
@@ -90,9 +119,8 @@ class SimpleThreadedXMLRPCServer(ThreadingMixIn, xmlrpc.server.SimpleXMLRPCServe
 def balanceDict(shardID : int):
     assert (shardID >= 0 and shardID <= 2), "Invalid Shard ID"
     result = dict()
-    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    for c in chars:
-        result[c + str(shardID)] = 1000
+    for key in range(shardID, shardID + 31, 3):
+        result[str(key)] = 1000
     return(result)
         
     

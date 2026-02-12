@@ -14,6 +14,7 @@ init(autoreset=True)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger()
+colors = [Fore.CYAN, Fore.LIGHTGREEN_EX, Fore.YELLOW, Fore.WHITE]
 
 def asyncRpc(method, *args):
     try:
@@ -32,7 +33,6 @@ def submitAsync(method, *args):
     executor.submit(task)
 
 def callback(result : str, level : int = logging.INFO, colorID = None):
-    colors = [Fore.CYAN, Fore.LIGHTGREEN_EX, Fore.YELLOW, Fore.WHITE]
     if colorID is not None:
         output = colors[colorID] + result
     else:
@@ -71,6 +71,9 @@ while True:
 
         elif func in ["moneyTransfer", "transfer", "transaction", "trans", "t"]:
             _, fromKey, toKey, amount = words
+            if (int(fromKey) % 3 == int(toKey) % 3):
+                print("Those two keys belong to the same shard. Cannot complete transaction.")
+                continue
             nodePort = getLeader(coordinatorPorts)
             while nodePort == -1:
                 time.sleep(0.5)
@@ -121,10 +124,28 @@ while True:
                 process = startShard(i, j, myCallbackPort, coordinatorPorts, shardPorts, True)
                 shardProcesses[i * 3 + j] = process
                 print("Shard", node, "has started back up.")
+
+        elif func in ["balance"]:
+            _, key = words
+            shard = int(key) % 3
+            print(f"BALANCE OF [{key}]")
+            for shardIdx, datacenter in zip(range(shard, 9, 3), [0, 1, 2]):
+                shardPort = shardPorts[shardIdx]
+                shardProxy = xmlrpc.client.ServerProxy(f"http://localhost:{shardPort}/")
+                print(colors[datacenter] + f"Datacenter {datacenter}: ", end="")
+                try:
+                    result = shardProxy.getShard()[key]
+                except:
+                    result = Fore.RED + "SHARD UNREACHABLE"
+                print(result)
+
         else:
             print("Error: Unrecognized function.")
     except EOFError:
         break
+    except Exception as e:
+        print(Fore.RED + f"{e}")
+
 
 
 # Cleanup
@@ -159,3 +180,9 @@ for id in [0, 1, 2]:
         os.remove(path)
     except FileNotFoundError:
         pass
+    for shard in [0, 1, 2]:
+        path = os.path.join(".", "raft", f"shard{id}{shard}.txt")
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass

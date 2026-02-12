@@ -17,31 +17,6 @@ from typing import Optional
 from colorama import Fore, Style, init
 
 
-class Role(Enum):
-    FOLLOWER = 0
-    CANDIDATE = 1
-    LEADER = 2
-    def __str__(self):
-        return(["FOLLOWER", "CANDIDATE", "LEADER"][self.value])    
-
-@dataclass
-class Transaction:
-    keyFrom: str
-    keyTo: str
-    amount: int
-    term: int
-    ID: int
-
-    def __str__(self):
-        return f"[{self.term}] {self.keyFrom} -(${self.amount})-> {self.keyTo}"
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @staticmethod
-    def from_dict(d: dict) -> "Transaction":
-        return Transaction(**d)
-
 class Raft:
     def __init__(self, id : int, myPort : int, peerPorts : list[int], shardPorts : list[int], recovery = False):
         self.path = os.path.join(".", "raft", f"{id}.txt")
@@ -76,7 +51,8 @@ class Raft:
             self.load(self.path)
 
         # Volatile state
-        self.commitIndex = 0
+        # Represents the last index that WAS committed
+        self.commitIndex = -1
         self.lastApplied = 0
         self.clock = time.time()
         self.electionTimeout = 0
@@ -87,7 +63,7 @@ class Raft:
         # Next index to send to the peer
         self.nextIndex = [len(self.log) for _ in self.peerProxies]
         # Last index known to match for the peer
-        self.matchIndex = [0 for _ in self.peerProxies]
+        self.matchIndex = [-1 for _ in self.peerProxies]
 
         self.registerFunctions()
 
@@ -152,7 +128,7 @@ class Raft:
     def stepUp(self):
         userCallback(f"Coordinator {self.id} has become the leader! Heartbeating to {len(self.peerProxies)} proxies.", logging.DEBUG)
         self.votedFor = None
-        self.matchIndex = [0 for _ in self.peerProxies]
+        self.matchIndex = [-1 for _ in self.peerProxies]
         self.nextIndex = [len(self.log) for _ in self.peerProxies]
         self.role = Role.LEADER
         self.save(self.path)
@@ -179,7 +155,7 @@ class Raft:
                 self.currentTerm = max(term, self.currentTerm)
                 if result:
                     self.matchIndex[i] = idx
-                    userCallback(f"Coordinator {self.id} successfully appended to {peerID}", logging.DEBUG)
+                    userCallback(f"Coordinator {self.id} has matchIndex[{peerID}] = {idx}", logging.DEBUG)
                 else:
                     self.nextIndex[i] -= 1
         self.save(self.path)
@@ -262,9 +238,7 @@ class Raft:
         self.log = self.log + entries[matches:]
 
         # Commit
-        if leaderCommit > self.commitIndex:
-            self.commitIndex = leaderCommit
-            self.doCommit()
+        self.doCommit(leaderCommit)
 
         self.save(self.path)
         return(True, self.currentTerm)
@@ -305,7 +279,9 @@ class Raft:
         # We repeatedly try to query each friend until we get success.
         self.catchUp()
         self.save(self.path)
-        userCallback(f"Your transaction with ID {t.ID} completed: {t}", colorID = 3)
+        userCallback(f"Your transaction with ID {t.ID} has been logged: {t}", colorID = 3)
+
+        self.doCommit(self.canCommit())
         return(True)
     
     def timeIn(self):
@@ -321,10 +297,51 @@ class Raft:
     def isLeader(self):
         userCallback(f"Coordinator {self.id} got a request to see if it's the leader. Its role is {self.role}", logging.DEBUG)
         return(self.role == Role.LEADER)
+    
+    # This function is only for leaders.
+    # We see who matches among the peers to see how high we can increment commitIndex.
+    def canCommit(self):
+        # If the leader has no entries in the log from its latest term,
+        # we can't commit anything.
+        if self.log[-1].term != self.currentTerm:
+            return(self.commitIndex)
+        
+        # Otherwise, see matches.
+        # There are only 3 coordinators, so the commitIndex is just the greatest among
+        # the match indices (this indicates majority.)
+        newIdx = max(self.commitIndex, max(self.matchIndex))
+        userCallback(f"Coordinator {self.id} can commit: {newIdx}", logging.DEBUG)
+        return(newIdx)
 
-    def doCommit(self):
-        for t in self.log[:self.commitIndex + 1]:
-            userCallback(f"Coordinator {self.id}, committed transaction: {t.keyFrom} -> [{t.amount}] -> {t.keyTo}")
+    def doCommit(self, newCommitIndex : int):
+        if newCommitIndex <= self.commitIndex:
+            return
+        
+        userCallback(f"Coordinator {self.id} committing from {self.commitIndex} to {newCommitIndex}", logging.DEBUG)
+        
+        for t in self.log[self.commitIndex + 1:newCommitIndex + 1]:
+            # Phase 1: Get agreement
+            success2p = True
+            for (i, proxy) in enumerate(self.shardProxies):
+                try:
+                    success2p = success2p and proxy.tryCommit(t.keyFrom, t.keyTo, t.amount)
+                except ConnectionRefusedError as e:
+                    userCallback(f"Coordinator {self.id} could not connect to shard {i}", colorID=self.id)
+                    success2p = False
+                except Exception as e:
+                    userCallback(f"During 2pc, coordinator {self.id} got an unknown error from shard {i}: {e}")
+            if not success2p:
+                break
+
+            # Phase 2: Confirm commitment
+            for proxy in self.shardProxies:
+                proxy.confirm(t.keyFrom, t.keyTo, t.amount)
+
+            userCallback(f"Coordinator {self.id} committed transaction with ID {t.ID}: {t.keyFrom} -> [{t.amount}] -> {t.keyTo}", colorID=self.id)
+
+            self.commitIndex += 1
+            # userCallback(f"Coordinator {self.id} now has commit index: {self.commitIndex}")
+
 
     def empty(self):
         return(len(self.log) == 0)

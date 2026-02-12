@@ -339,7 +339,7 @@ class Raft:
             for proxy in self.shardProxies:
                 proxy.confirm(t.keyFrom, t.keyTo, t.amount)
 
-            userCallback(f"Coordinator {self.id} committed transaction with ID {t.ID}: {t.keyFrom} -> [{t.amount}] -> {t.keyTo}", colorID=self.id)
+            userCallback(f"Coordinator {self.id} committed transaction with ID {t.ID}: {t}", colorID=self.id)
 
             self.commitIndex += 1
             self.save(self.path)

@@ -98,6 +98,7 @@ def startCoordinator(ID : int, callback : int, coordinatorPorts : list[int],
 
 def startShard(dataCenterID : int, shardID : int, callback : int, 
                coordinatorPorts : list[int], shardPorts : list[int], recovery = False) -> subprocess.Popen:
+    # print(f"Starting shard {dataCenterID}{shardID}")
     myID = (shardID) + (dataCenterID * 3)
     friendID1 = ((shardID + 1) % 3) + (dataCenterID * 3)
     friendID2 = ((shardID + 2) % 3) + (dataCenterID * 3)

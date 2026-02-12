@@ -116,7 +116,8 @@ while True:
                 coordinatorProcesses[i] = process
                 print("Data center", node, "has started back up.")
                 for j in range(i*3, i*3+3):
-                    process = startShard(i, j, myCallbackPort, coordinatorPorts, shardPorts, True)
+                    process = startShard(i, j % 3, myCallbackPort, coordinatorPorts, shardPorts, True)
+                    shardProcesses[j] = process
                 print("All shards from data center", node, "have started back up.")
             else:
                 i = int(node[0])

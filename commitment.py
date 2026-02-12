@@ -23,6 +23,7 @@ class Committer:
 
         if not recovery:
             self.balances : dict[str, int] = balanceDict(self.shardID)
+            self.save(self.path)
         else:
             self.balances = dict()
             self.load(self.path)

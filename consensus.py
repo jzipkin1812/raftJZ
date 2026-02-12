@@ -47,12 +47,13 @@ class Raft:
         self.currentTerm = 0
         self.votedFor = None
         self.log : list[Transaction] = []
+        self.commitIndex = -1
+
         if recovery:
             self.load(self.path)
 
         # Volatile state
         # Represents the last index that WAS committed
-        self.commitIndex = -1
         self.lastApplied = 0
         self.clock = time.time()
         self.electionTimeout = 0
@@ -78,6 +79,7 @@ class Raft:
             "currentTerm": self.currentTerm,
             "votedFor": self.votedFor,
             "log": [tx.to_dict() for tx in self.log],
+            "commitIndex" : self.commitIndex,
         }
 
         with open(path, "w", encoding="utf-8") as f:
@@ -90,6 +92,7 @@ class Raft:
         self.role = Role(data["role"])
         self.currentTerm = data["currentTerm"]
         self.votedFor = data["votedFor"]
+        self.commitIndex = data["commitIndex"]
         self.log = [Transaction.from_dict(tx) for tx in data["log"]]
 
     def registerFunctions(self):
@@ -318,7 +321,6 @@ class Raft:
             return
         
         userCallback(f"Coordinator {self.id} committing from {self.commitIndex} to {newCommitIndex}", logging.DEBUG)
-        
         for t in self.log[self.commitIndex + 1:newCommitIndex + 1]:
             # Phase 1: Get agreement
             success2p = True
@@ -340,6 +342,7 @@ class Raft:
             userCallback(f"Coordinator {self.id} committed transaction with ID {t.ID}: {t.keyFrom} -> [{t.amount}] -> {t.keyTo}", colorID=self.id)
 
             self.commitIndex += 1
+            self.save(self.path)
             # userCallback(f"Coordinator {self.id} now has commit index: {self.commitIndex}")
 
 

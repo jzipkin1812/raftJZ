@@ -9,6 +9,7 @@ import logging
 from utils import examine, parseAndStart, getLeader, startCoordinator, startShard
 import random
 import os
+from dataclasses import dataclass
 from colorama import Fore, Style, init
 init(autoreset=True)
 
@@ -38,6 +39,22 @@ def callback(result : str, level : int = logging.INFO, colorID = None):
     else:
         output = result
 
+    if("committed transaction") in result:
+        # print("FOUDN A COMMITMENT!!!", result)
+        # Aggregate
+        try:
+            words = result.split(" ")
+            ID = int(words[6][:-1])
+            tp = None
+            for item in TPs:
+                if item.ID == ID:
+                    tp = item
+            tp.committed += 1
+            if (tp.committed > 1):
+                tp.ended = time.time()
+        except Exception as e:
+            print(e)
+
     log.log(level, msg=output)  
     return("Thanks! --the user")
 
@@ -57,6 +74,15 @@ server = xmlrpc.server.SimpleXMLRPCServer(("127.0.0.1", myCallbackPort), logRequ
 server.register_function(callback, "callback")
 serverExecutor.submit(lambda: server.serve_forever())
 time.sleep(0.6)
+
+@dataclass
+class TP:
+    committed : int
+    started : float
+    ended : float
+    ID : int
+
+TPs : list[TP] = []
 
 while True:
     try:
@@ -80,7 +106,9 @@ while True:
                 nodePort = getLeader(coordinatorPorts)
             proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
             print(f"Submitting transfer to coordinator {nodePort}")
-            submitAsync(proxy.transfer, fromKey, toKey, amount, random.randint(1, 1000000))
+            ID = random.randint(1, 1000000)
+            TPs.append(TP(0, time.time(), None, ID))
+            submitAsync(proxy.transfer, fromKey, toKey, amount, ID)
 
         elif func in ["log", "printLog", "printTransactions"]:
             _, ID = words
@@ -139,6 +167,19 @@ while True:
                 except:
                     result = Fore.RED + "SHARD UNREACHABLE"
                 print(result)
+        
+        elif func in ["Performance"]:
+            sumTimes : float = 0.0
+            ct = 0
+            for tp in TPs:
+                if tp.committed > 1 and tp.ended is not None:
+                    sumTimes += tp.ended - tp.started
+                    ct += 1
+            print("Total transactions committed:", ct)
+            if (ct > 0):
+                print("Average latency:", sumTimes / ct)
+                print("Throughput (transactions/sec):", ct / sumTimes)
+            
 
         else:
             print("Error: Unrecognized function.")

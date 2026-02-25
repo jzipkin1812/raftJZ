@@ -65,6 +65,11 @@ class Raft:
         self.nextIndex = [len(self.log) for _ in self.peerProxies]
         # Last index known to match for the peer
         self.matchIndex = [-1 for _ in self.peerProxies]
+        # Heartbeat clock
+        self.timeSinceHeartbeat = time.time()
+
+        # Mutex
+        self.mut = threading.Lock()
 
         self.registerFunctions()
 
@@ -139,6 +144,7 @@ class Raft:
 
 
     def catchUp(self):
+        self.lastHeartbeat = time.time()
         for (i, proxy) in enumerate(self.peerProxies):
             peerID = self.peerIDs[i]
             result = False
@@ -164,31 +170,32 @@ class Raft:
         self.save(self.path)
 
     def campaign(self):
-        def sendVoteRequest(proxy : xmlrpc.client.ServerProxy):
-            success, term = proxy.RequestVote(self.currentTerm, self.id, len(self.log) - 1, self.lastLogTerm())
-            if term > self.currentTerm:
-                self.currentTerm = term
-            return(success)
+        with self.mut:
+            def sendVoteRequest(proxy : xmlrpc.client.ServerProxy):
+                success, term = proxy.RequestVote(self.currentTerm, self.id, len(self.log) - 1, self.lastLogTerm())
+                if term > self.currentTerm:
+                    self.currentTerm = term
+                return(success)
 
-        with ThreadPoolExecutor() as executor:
-            futures = [executor.submit(sendVoteRequest, proxy) for proxy in self.peerProxies]
+            with ThreadPoolExecutor() as executor:
+                futures = [executor.submit(sendVoteRequest, proxy) for proxy in self.peerProxies]
 
-            results = []
-            for f in as_completed(futures):
-                try: 
-                    res = f.result()
-                    # userCallback(f"Coordinator {self.id} got the vote req result: {res}")
-                    results.append(res)
-                except Exception as e:
-                    userCallback(f"Coordinator {self.id} tried to submit a vote request but got the error: {e}", logging.DEBUG)
-                    results.append(False)
-                    
-            # assert len(results) > 1, "No results were received; consensus cannot be reached if both other datacenters have failed!"
-            userCallback(f"Coordinator {self.id} results from campaign: {results}", logging.DEBUG)
-            # The following code only works with 3 coordinators but that's okay.
-            success = (True in results)
-            return(success)
-        
+                results = []
+                for f in as_completed(futures):
+                    try: 
+                        res = f.result()
+                        # userCallback(f"Coordinator {self.id} got the vote req result: {res}")
+                        results.append(res)
+                    except Exception as e:
+                        userCallback(f"Coordinator {self.id} tried to submit a vote request but got the error: {e}", logging.DEBUG)
+                        results.append(False)
+                        
+                # assert len(results) > 1, "No results were received; consensus cannot be reached if both other datacenters have failed!"
+                userCallback(f"Coordinator {self.id} results from campaign: {results}", logging.DEBUG)
+                # The following code only works with 3 coordinators but that's okay.
+                success = (True in results)
+                return(success)
+            
     # Wrapper for append entries
     def Heartbeat(self, term : int, leaderId : int, prevLogIndex : int, prevLogTerm : int, leaderCommit : int) -> tuple[bool, int]:
         userCallback(f"Coordinator {self.id} got a Heartbeat from leader {leaderId}", logging.DEBUG)
@@ -197,61 +204,62 @@ class Raft:
     def AppendEntries(self, term : int, leaderId : int, prevLogIndex : int, 
                       prevLogTerm : int, entries : list[Transaction], 
                       leaderCommit : int) -> tuple[bool, int]:
-        rejection = (False, self.currentTerm)
+        with self.mut:
+            rejection = (False, self.currentTerm)
 
-        # Convert entries to real Transactionsgot
-        for (i, d) in enumerate(entries):
-            if type(d) != Transaction:
-                entries[i] = Transaction(d["keyFrom"], d["keyTo"], d["amount"], d["term"], d["ID"])
-        
-        # Outdated append RPC is rejected.
-        if term < self.currentTerm:
-            userCallback(f"Coordinator {self.id} is rejecting an outdated Append from {leaderId} b/c of terms: {term} < {self.currentTerm} ")
-            return(rejection)
-        
-        # Otherwise, we at least acknowledge that the leader who sent this is recent.
-        self.knownLeader = leaderId
-        self.votedFor = None
-        self.timeIn()
-        if term > self.currentTerm:
-            self.currentTerm = term
-        if self.role == Role.CANDIDATE or self.role == Role.LEADER:
-            self.role = Role.FOLLOWER
-        
-        # If this Raft's log is outdated, we can't append anything.
-        if len(self.log) <= prevLogIndex:
-            userCallback(f"{self.id} rejecting Append from {leaderId} because my log length {len(self.log)} <= {prevLogIndex} prevLogIndex")
-            return(rejection)
-        if (not self.empty()) and (prevLogIndex >= 0) and (self.log[prevLogIndex].term != prevLogTerm):
-            userCallback(f"{self.id} rejecting Append from {leaderId} self.log[{prevLogIndex}] is {self.log[prevLogIndex]} and prevLogTerm is {prevLogTerm}")
-            return(rejection)
-                
-        # Loop through the log and delete as necessary
-        matches = 0
-        series = enumerate(zip(self.log[prevLogIndex + 1:], entries))
-        for (i, (myTransaction, givenTransaction)) in series:
-            indexOfMine = i + prevLogIndex
-            if myTransaction != givenTransaction:
-                self.log = self.log[:indexOfMine]
-                break
-            else:
-                matches += 1
-        
-        # Append
-        self.log = self.log + entries[matches:]
+            # Convert entries to real Transactionsgot
+            for (i, d) in enumerate(entries):
+                if type(d) != Transaction:
+                    entries[i] = Transaction(d["keyFrom"], d["keyTo"], d["amount"], d["term"], d["ID"])
+            
+            # Outdated append RPC is rejected.
+            if term < self.currentTerm:
+                userCallback(f"Coordinator {self.id} is rejecting an outdated Append from {leaderId} b/c of terms: {term} < {self.currentTerm} ")
+                return(rejection)
+            
+            # Otherwise, we at least acknowledge that the leader who sent this is recent.
+            self.knownLeader = leaderId
+            self.votedFor = None
+            self.timeIn()
+            if term > self.currentTerm:
+                self.currentTerm = term
+            if self.role == Role.CANDIDATE or self.role == Role.LEADER:
+                self.role = Role.FOLLOWER
+            
+            # If this Raft's log is outdated, we can't append anything.
+            if len(self.log) <= prevLogIndex:
+                userCallback(f"{self.id} rejecting Append from {leaderId} because my log length {len(self.log)} <= {prevLogIndex} prevLogIndex")
+                return(rejection)
+            if (not self.empty()) and (prevLogIndex >= 0) and (self.log[prevLogIndex].term != prevLogTerm):
+                userCallback(f"{self.id} rejecting Append from {leaderId} self.log[{prevLogIndex}] is {self.log[prevLogIndex]} and prevLogTerm is {prevLogTerm}")
+                return(rejection)
+                    
+            # Loop through the log and delete as necessary
+            matches = 0
+            series = enumerate(zip(self.log[prevLogIndex + 1:], entries))
+            for (i, (myTransaction, givenTransaction)) in series:
+                indexOfMine = i + prevLogIndex
+                if myTransaction != givenTransaction:
+                    self.log = self.log[:indexOfMine]
+                    break
+                else:
+                    matches += 1
+            
+            # Append
+            self.log = self.log + entries[matches:]
 
-        # Commit
-        self.doCommit(leaderCommit)
+            # Commit
+            self.doCommit(leaderCommit)
 
-        self.save(self.path)
-        return(True, self.currentTerm)
+            self.save(self.path)
+            return(True, self.currentTerm)
         
     def RequestVote(self, term : int, candidateId : int, 
                     lastLogIndex : int, lastLogTerm : int) -> tuple[bool, int]:
         rejection = (False, self.currentTerm)
         # Basics
         if term < self.currentTerm or \
-                  (self.votedFor != None and self.votedFor != candidateId):
+                (self.votedFor != None and self.votedFor != candidateId):
             return(rejection)
         # Outdated log
         elif (not self.empty) and (self.log[-1].term > lastLogTerm):

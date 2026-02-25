@@ -43,5 +43,6 @@ while True:
     if raft.timedOut():
         raft.beginElection()
 
-    # if raft.role == Role.FOLLOWER:
+    if raft.role == Role.LEADER and time.time() - raft.lastHeartbeat > 1.5:
+        raft.catchUp()
 

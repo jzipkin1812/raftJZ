@@ -86,6 +86,7 @@ TPs : list[TP] = []
 
 while True:
     try:
+        time.sleep(0.1)
         line = input()
         words = [w for w in line.split(" ") if len(w) > 0]
         if len(words) < 1:
@@ -101,9 +102,13 @@ while True:
                 print("Those two keys belong to the same shard. Cannot complete transaction.")
                 continue
             nodePort = getLeader(coordinatorPorts)
-            while nodePort == -1:
+            now = time.time()
+            while nodePort == -1 and time.time() - now < 5.0:
                 time.sleep(0.5)
                 nodePort = getLeader(coordinatorPorts)
+            if nodePort == -1:
+                print(Fore.RED + "Aborting transaction. No leader was found. Two or more datacenters are likely down.")
+                continue
             proxy = xmlrpc.client.ServerProxy(f"http://localhost:{nodePort}/")
             print(f"Submitting transfer to coordinator {nodePort}")
             ID = random.randint(1, 1000000)

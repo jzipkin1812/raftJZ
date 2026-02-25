@@ -12,3 +12,6 @@ run_project:
 run_terminal: 
 	python3 user.py --callback $(USERPORT) --coordinator $(COORDPORT) --shard $(SHARDPORT)
 	./kill.sh
+
+kill:
+	./kill.sh

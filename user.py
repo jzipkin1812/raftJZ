@@ -98,7 +98,10 @@ while True:
 
         elif func in ["moneyTransfer", "transfer", "transaction", "trans", "t"]:
             _, fromKey, toKey, amount = words
-            if (int(fromKey) % 3 == int(toKey) % 3):
+            if (int(fromKey) > 29 or int(toKey) > 29):
+                print("Invalid key.")
+                continue
+            elif (int(fromKey) % 3 == int(toKey) % 3):
                 print("Those two keys belong to the same shard. Cannot complete transaction.")
                 continue
             nodePort = getLeader(coordinatorPorts)
@@ -159,7 +162,7 @@ while True:
                 shardProcesses[i * 3 + j] = process
                 print("Shard", node, "has started back up.")
 
-        elif func in ["balance"]:
+        elif func in ["printBalance", "balance"]:
             _, key = words
             shard = int(key) % 3
             print(f"BALANCE OF [{key}]")

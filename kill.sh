@@ -12,9 +12,6 @@ for PORT in "${PORTS[@]}"; do
     fi
 done
 
-rm raft/0.txt 2> /dev/null
-rm raft/1.txt 2> /dev/null
-rm raft/2.txt 2> /dev/null
 rm raft/*.txt 2> /dev/null
 
 echo "Done."

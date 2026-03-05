@@ -103,7 +103,6 @@ class Raft:
     def registerFunctions(self):
         f = self.server.register_function
         f(self.AppendEntries, "AppendEntries")
-        f(self.Heartbeat, "Heartbeat")
         f(self.RequestVote, "RequestVote")
         f(self.getIndex, "getIndex")
         f(self.isLeader, "isLeader")
@@ -141,7 +140,6 @@ class Raft:
         self.role = Role.LEADER
         self.save(self.path)
         self.catchUp()
-
 
     def catchUp(self):
         self.lastHeartbeat = time.time()
@@ -204,6 +202,7 @@ class Raft:
     def AppendEntries(self, term : int, leaderId : int, prevLogIndex : int, 
                       prevLogTerm : int, entries : list[Transaction], 
                       leaderCommit : int) -> tuple[bool, int]:
+        time.sleep(0.5)
         with self.mut:
             rejection = (False, self.currentTerm)
 
@@ -256,6 +255,7 @@ class Raft:
         
     def RequestVote(self, term : int, candidateId : int, 
                     lastLogIndex : int, lastLogTerm : int) -> tuple[bool, int]:
+        time.sleep(0.5)
         rejection = (False, self.currentTerm)
         # Basics
         if term < self.currentTerm or \
@@ -315,6 +315,7 @@ class Raft:
         # If the leader has no entries in the log from its latest term,
         # we can't commit anything.
         if self.log[-1].term != self.currentTerm:
+            userCallback(f"Leader {self.id} cannot commit anything!", logging.DEBUG)
             return(self.commitIndex)
         
         # Otherwise, see matches.

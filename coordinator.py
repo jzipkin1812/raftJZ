@@ -45,4 +45,5 @@ while True:
 
     if raft.role == Role.LEADER and time.time() - raft.lastHeartbeat > 1.5:
         raft.catchUp()
+        raft.doCommit(raft.canCommit())
 

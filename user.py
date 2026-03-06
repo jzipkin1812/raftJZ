@@ -176,7 +176,7 @@ while True:
                     result = Fore.RED + "SHARD UNREACHABLE"
                 print(result)
         
-        elif func in ["Performance"]:
+        elif func in ["Performance", "performance", "latency", "throughput"]:
             sumTimes : float = 0.0
             ct = 0
             for tp in TPs:
